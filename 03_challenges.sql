@@ -15,6 +15,7 @@
 
 -- 6. Find the names of students who have taken exactly 8 exams.
 
+
 -- ==============================================================================
 -- Intermediate Level (Aggregations, Conditional Logic, & Subqueries)
 -- ==============================================================================
@@ -35,3 +36,30 @@
 
 -- 13. Create a query that maps string grades to a numeric GPA 
 -- (e.g., o++=6, o+=5, o=4, ee=3, a=2, p=1, troll=0) and calculates the average GPA for the Slytherin house.
+
+-- ==============================================================================
+-- Advanced Level (Window Functions, CTEs, & Real-World Data Engineering)
+-- ==============================================================================
+
+-- 14. Rank Students: Use DENSE_RANK() to identify the top-performing student in each house 
+-- based on their calculated numeric GPA.
+
+-- 15. Temporal Windowing: Calculate the running cumulative total of 'o' and 'o++' grades 
+-- awarded day-by-day throughout the exam period.
+
+-- 16. Dynamic Pivoting: Transform the vertical exams table into a horizontal gradebook.
+-- Output rows of student names and columns for 'Potions', 'Charms', and 'Transfiguration'
+-- showing their specific grade.
+
+-- 17. Nested JSONB (API Prep): Write a query using jsonb_agg and jsonb_build_object to output 
+-- a single JSON document per house, nesting an array of students, 
+-- which nests an array of their exams and grades.
+
+-- 18. Relational Division: Find pairs of students who share the exact same academic profile 
+-- (took the exact same courses and received the exact same grades).
+
+-- 19. Relative Performance: Find students who scored lower in Potions than their own house's 
+-- average GPA for Potions.
+
+-- 20. The Flawless Record: Identify students who passed every single exam they took 
+-- without a single 'p' or 'troll', using a HAVING clause with conditional aggregation.

@@ -234,3 +234,275 @@ SELECT
 FROM student_gpas
 WHERE house_name = 'Slytherin'
 GROUP BY house_name;
+
+
+
+-- ==============================================================================
+-- Advanced Level (Window Functions, CTEs, & Real-World Data Engineering)
+-- ==============================================================================
+
+
+
+-- 14. Rank Students: Use DENSE_RANK() to identify the top-performing student in each house 
+-- based on their calculated numeric GPA.
+
+WITH tmp_marks AS(
+    SELECT
+        first_name || ' ' || last_name AS student_name,
+        students.student_id AS student_id,
+        house_name,
+        AVG(
+            CASE
+                WHEN grade_result = 'o++' THEN 6.0
+                WHEN grade_result = 'o+' THEN 5.0
+                WHEN grade_result = 'o' THEN 4.0
+                WHEN grade_result = 'ee' THEN 3.0
+                WHEN grade_result = 'a' THEN 2.0
+                WHEN grade_result = 'p' THEN 1.0
+                ELSE 0.00
+            END
+        ) AS individual_gpa
+    FROM students
+    JOIN exams
+    ON students.student_id = exams.student_id
+    JOIN houses
+    ON houses.house_id = students.house_id
+    GROUP BY house_name, students.student_id
+),
+
+tmp_ranks AS(
+    SELECT
+        student_name,
+        house_name,
+        ROUND(individual_gpa, 2) AS gpa,
+        DENSE_RANK() OVER(PARTITION BY house_name ORDER BY individual_gpa DESC) AS rnk
+    FROM tmp_marks
+)
+
+SELECT
+    student_name,
+    house_name,
+    gpa,
+    rnk
+FROM tmp_ranks
+WHERE rnk = 1;
+
+
+-- 15. Temporal Windowing: Calculate the running cumulative total of 'o' and 'o++' grades 
+-- awarded day-by-day throughout the exam period.
+
+WITH tmp_cumulative AS(
+    SELECT
+    exam_date,
+    SUM(CASE WHEN grade_result IN ('o++', 'o+') THEN 1 ELSE 0 END) AS top_grades
+FROM exams
+GROUP BY exam_date
+)
+
+SELECT
+    exam_date,
+    top_grades,
+    SUM(top_grades) OVER (
+        ORDER BY exam_date ASC
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS cumulative_total
+FROM tmp_cumulative;
+
+
+-- 16. Dynamic Pivoting: Transform the vertical exams table into a horizontal gradebook.
+-- Output rows of student names and columns for 'Potions', 'Charms', and 'Transfiguration'
+-- showing their specific grade.
+
+SELECT
+    first_name || ' ' || last_name AS student,
+    MAX(CASE WHEN course_name = 'Potions' THEN grade_result END) AS potions,
+    MAX(CASE WHEN course_name = 'Charms' THEN grade_result END) AS charms,
+    MAX(CASE WHEN course_name = 'Transfiguration' THEN grade_result END) AS transfiguration
+FROM students
+JOIN exams ON students.student_id = exams.student_id
+JOIN courses ON courses.course_id = exams.course_id
+WHERE course_name IN ('Potions', 'Charms', 'Transfiguration')
+GROUP BY students.student_id, student
+ORDER BY student ASC;
+
+-- WITH tmp_courses AS(
+--     SELECT
+--         first_name || ' ' || last_name AS student_name,
+--         grade_result,
+--         course_name
+-- FROM exams
+-- JOIN students
+-- ON exams.student_id = students.student_id
+-- JOIN courses
+-- ON courses.course_id = exams.course_id
+-- WHERE course_name IN ('Potions', 'Charms', 'Transfiguration')
+-- ),
+
+-- tmp_table_1 AS(
+--     SELECT
+--         student_name,
+--         CASE WHEN course_name = 'Potions' THEN grade_result END AS Potions
+--     FROM tmp_courses
+--     WHERE course_name = 'Potions'
+-- ),
+
+-- tmp_table_2 AS(
+--     SELECT
+--         student_name,
+--         CASE WHEN course_name = 'Charms' THEN grade_result END AS Charms
+--     FROM tmp_courses
+--     WHERE course_name = 'Charms'
+-- ),
+
+-- tmp_table_3 AS(
+--     SELECT
+--         student_name,
+--         CASE WHEN course_name = 'Transfiguration' THEN grade_result END AS Transfiguration
+--     FROM tmp_courses
+--     WHERE course_name = 'Transfiguration'
+-- )
+
+-- SELECT
+--     tmp_table_1.student_name AS student,
+--     potions,
+--     charms,
+--     transfiguration
+-- FROM tmp_table_1
+-- JOIN tmp_table_2 ON tmp_table_1.student_name = tmp_table_2.student_name
+-- JOIN tmp_table_3 ON tmp_table_1.student_name = tmp_table_3.student_name
+-- ORDER BY student ASC;
+
+-- 17. Nested JSONB (API Prep): Write a query using jsonb_agg and jsonb_build_object to output 
+-- a single JSON document per house, nesting an array of students, 
+-- which nests an array of their exams and grades.
+
+
+SELECT
+    jsonb_build_object(
+        'house_name', h.house_name,
+        'head_of_house', h.head_of_house,
+        'students', (
+            -- Middle Layer: Aggregate students belonging to this specific house into a JSON array
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'student_name', s.first_name || ' ' || s.last_name,
+                    'hogwarts_year', s.hogwarts_year,
+                    'exams', (
+                        -- Innermost Layer: Aggregate exams belonging to this specific student into a JSON array
+                        SELECT jsonb_agg(
+                            jsonb_build_object(
+                                'course_name', c.course_name,
+                                'grade', e.grade_result,
+                                'exam_date', e.exam_date
+                            )
+                        )
+                        FROM exams e
+                        JOIN courses c ON e.course_id = c.course_id
+                        WHERE e.student_id = s.student_id
+                    )
+                )
+            )
+            FROM students s
+            WHERE s.house_id = h.house_id
+        )
+    ) AS house_json
+FROM houses h;
+
+
+-- 18. Relational Division: Find pairs of students who share the exact same academic profile 
+-- (took the exact same courses and received the exact same grades).
+
+WITH tmp_students AS(
+    SELECT
+        students.student_id AS student_id,
+        first_name || ' ' || last_name AS full_name,
+        course_name,
+        grade_result
+    FROM students
+    JOIN exams
+    ON students.student_id = exams.student_id
+    JOIN courses
+    ON exams.course_id = courses.course_id
+),
+
+tmp_courses_cnt AS(
+    SELECT
+        student_id,
+        full_name,
+        COUNT(course_name) AS courses
+    FROM tmp_students
+    GROUP BY student_id, full_name
+)
+
+SELECT
+    a.full_name,
+    b.full_name,
+    COUNT(*) AS cnt
+
+FROM tmp_students a
+JOIN tmp_students b
+ON a.course_name = b.course_name AND a.grade_result = b.grade_result AND a.student_id != b.student_id
+JOIN tmp_courses_cnt c
+ON c.full_name = a.full_name
+JOIN tmp_courses_cnt d
+ON d.full_name = b.full_name AND c.courses = d.courses
+GROUP BY a.full_name, b.full_name, c.courses
+HAVING COUNT(*) = c.courses;
+
+-- 19. Relative Performance: Find students who scored lower in Potions than their own house's 
+-- average GPA for Potions.
+
+WITH student_gpas AS (
+    SELECT
+        houses.house_name AS house_name,
+        students.student_id AS student_id,
+        exams.course_id AS course_id,
+        course_name,
+        first_name || ' ' || last_name AS full_name,
+        CASE
+            WHEN grade_result = 'o++' THEN 6.0
+            WHEN grade_result = 'o+'  THEN 5.0
+            WHEN grade_result = 'o'   THEN 4.0
+            WHEN grade_result = 'ee'  THEN 3.0
+            WHEN grade_result = 'a'   THEN 2.0
+            WHEN grade_result = 'p'   THEN 1.0
+            ELSE 0.0
+        END AS marks
+    FROM students
+    JOIN exams ON students.student_id = exams.student_id
+    JOIN houses ON houses.house_id = students.house_id
+    JOIN courses ON courses.course_id = exams.course_id
+    WHERE course_name = 'Potions'
+    GROUP BY houses.house_name, exams.course_id, students.student_id, course_name, marks  
+),
+
+house_gpas AS(
+    SELECT
+        house_name,
+        ROUND(SUM(marks)::DECIMAL/COUNT(student_id), 2) AS house_gpa
+    FROM student_gpas
+    GROUP BY house_name
+)
+
+SELECT
+    full_name,
+    student_gpas.house_name
+FROM student_gpas
+JOIN house_gpas
+ON student_gpas.house_name = house_gpas.house_name
+WHERE marks < house_gpa;
+
+
+
+-- 20. The Flawless Record: Identify students who passed every single exam they took 
+-- without a single 'p' or 'troll', using a HAVING clause with conditional aggregation.
+
+SELECT
+    a.student_id,
+    first_name || ' ' || last_name AS full_name
+FROM students a
+JOIN exams
+ON a.student_id = exams.student_id
+GROUP BY a.student_id
+HAVING SUM(CASE WHEN grade_result IN('p', 'troll') THEN 1 ELSE 0 END) = 0
+ORDER BY full_name ASC;
