@@ -1,3 +1,4 @@
+
 import os
 import re
 from collections import Counter
@@ -25,6 +26,17 @@ WORKSPACE_FILE = "workspace/03_challenges.sql"
 # result sets. It needs a separate performance-oriented check.
 COMPARABLE_QUERY_IDS = range(1, 30)
 
+# Only this exact heading format identifies a question:
+# -- QUESTION 18: Relational Division
+#
+# Numbered comments inside explanations, such as:
+# -- 1. Generate unique pairs of students.
+# are deliberately not recognized.
+QUESTION_MARKER_PATTERN = re.compile(
+    r"(?m)^\s*--\s*QUESTION\s+(\d+)\s*:\s*.*$",
+    flags=re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------
 # SQL file parsing
@@ -39,9 +51,17 @@ def remove_comments(sql):
 
 def load_numbered_queries(filepath):
     """
-    Extract SQL query blocks using markers such as:
-        -- 1. Description
+    Extract SQL query blocks using unambiguous question markers.
+
+    Expected format:
+        -- QUESTION 1: Description
         SELECT ...
+
+        -- QUESTION 2: Description
+        SELECT ...
+
+    Only lines matching QUESTION_MARKER_PATTERN are treated
+    as question headings.
 
     Returns:
         {1: "SELECT ...", 2: "SELECT ...", ...}
@@ -54,12 +74,7 @@ def load_numbered_queries(filepath):
     with open(filepath, "r", encoding="utf-8") as file:
         content = file.read()
 
-    markers = list(
-        re.finditer(
-            r"(?m)^\s*--\s*(\d+)\.\s*.*$",
-            content
-        )
-    )
+    markers = list(QUESTION_MARKER_PATTERN.finditer(content))
 
     queries = {}
 

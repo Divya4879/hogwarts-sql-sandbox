@@ -1,313 +1,320 @@
-# PostgreSQL Upserts & Mutation Mechanics
+# Moving Averages & Window Framing
 
-## 1. The Engineering Problem: Handling Duplicate Records and Retakes
+## 1. What Is a Moving Average?
 
-In a relational database, **unique constraints** prevent duplicate records from being inserted.
+A moving average (also called a rolling average) calculates the average of a metric over a sliding window of observations.
 
-Consider an `exams` table where a student should have only one exam record per course on a particular date. A unique constraint might be defined on:
+It is useful in time-series analytics because raw data can fluctuate significantly from one day to another. A moving average smooths short-term variations and makes longer-term trends easier to identify.
 
-```sql
-UNIQUE (student_id, course_id, exam_date)
-```
+**Example use cases:**
+- Monitoring daily server errors.
+- Tracking daily sales.
+- Analysing website traffic.
+- Monitoring daily exam grades.
 
-Now imagine two scenarios:
-
-- A student retakes an exam, and the system needs to update the existing record.
-- A data ingestion pipeline processes the same batch more than once, attempting to insert records that already exist.
-
-A normal `INSERT` will fail when a row violates the unique constraint:
-
-```sql
-INSERT INTO exams (
-    student_id,
-    course_id,
-    exam_date,
-    grade_result
-)
-VALUES (1, 3, '2004-05-26', 'ee');
-```
-
-If that combination of `student_id`, `course_id`, and `exam_date` already exists, PostgreSQL raises a unique constraint violation.
-
-One solution is to check whether the record exists and then decide whether to run an `INSERT` or an `UPDATE`. However, this requires additional queries and can introduce race conditions when multiple transactions attempt the same operation concurrently.
-
-PostgreSQL provides a more efficient solution: **UPSERT**.
-
-An upsert combines:
-
-- `INSERT`: Create a new record if it does not exist.
-- `UPDATE`: Modify the existing record if a specified uniqueness conflict occurs.
+For this challenge, we want to calculate the **3-day rolling average of the total `o` and `o++` grades awarded across the school**.
 
 ---
 
-## 2. Core Concepts & Mechanics
+## 2. The Two-Step Approach
 
-### A. The `ON CONFLICT` Clause
+Calculating a moving average from transaction-level data generally involves two stages.
 
-`ON CONFLICT` specifies what PostgreSQL should do when an attempted insertion violates a unique constraint or unique index.
+### Step 1: Aggregate data to the required time grain
 
-It supports two main actions:
-
-**1. `DO NOTHING`**
-
-Ignore the conflicting insertion.
-
-```sql
-INSERT INTO exams (
-    student_id,
-    course_id,
-    exam_date,
-    grade_result
-)
-VALUES (1, 3, '2004-05-26', 'ee')
-ON CONFLICT (student_id, course_id, exam_date)
-DO NOTHING;
-```
-
-If the record already exists, PostgreSQL skips the insertion instead of raising a duplicate-key error.
-
-**2. `DO UPDATE`**
-
-Update the existing record when a conflict occurs.
-
-```sql
-INSERT INTO exams (
-    student_id,
-    course_id,
-    exam_date,
-    grade_result
-)
-VALUES (1, 3, '2004-05-26', 'ee')
-ON CONFLICT (student_id, course_id, exam_date)
-DO UPDATE
-SET grade_result = EXCLUDED.grade_result;
-```
-
-If the specified combination already exists, PostgreSQL updates its grade instead of inserting another record.
-
-**Important:** The conflict target must correspond to an appropriate unique constraint or unique index. PostgreSQL cannot use `ON CONFLICT` to handle arbitrary conflicts, such as a foreign-key violation.
-
-### B. The `EXCLUDED` Pseudo-Table
-
-When PostgreSQL encounters a conflict, it needs to distinguish between:
-
-- The existing row already stored in the table.
-- The incoming row that was proposed for insertion.
-
-`EXCLUDED` represents the incoming row that could not be inserted because of the conflict.
+The `exams` table contains individual exam records. We first aggregate these records into one row per calendar date.
 
 For example:
 
-```sql
-ON CONFLICT (student_id, course_id, exam_date)
-DO UPDATE
-SET grade_result = EXCLUDED.grade_result;
-```
+| exam_date | daily_top_grades |
+|---|---:|
+| 2026-10-01 | 5 |
+| 2026-10-02 | 8 |
+| 2026-10-03 | 3 |
 
-Here:
+This produces a consistent daily metric.
 
-- `grade_result` refers to the existing row's column.
-- `EXCLUDED.grade_result` refers to the incoming row's grade.
+### Step 2: Apply a window function
 
-This allows PostgreSQL to update existing records using values from the attempted insertion.
-
-### C. The `RETURNING` Clause
-
-Normally, an application might need another `SELECT` query to retrieve a row after inserting or updating it.
-
-PostgreSQL's `RETURNING` clause returns values from rows affected by a data modification statement.
+Once we have one row per date, we use `AVG()` as a window function to calculate the moving average.
 
 ```sql
-INSERT INTO exams (...)
-VALUES (...)
-ON CONFLICT (...)
-DO UPDATE
-SET grade_result = EXCLUDED.grade_result
-RETURNING student_id, course_id, exam_date, grade_result;
-```
-
-It returns the resulting rows from successful insertions and updates.
-
-**Important:** Rows skipped by `DO NOTHING`, or rows excluded by a `DO UPDATE ... WHERE` condition, are not returned.
-
-This is particularly useful in backend APIs because the application can retrieve the modified record without issuing a separate query.
-
-### D. Conditional Updates with `WHERE`
-
-An upsert does not have to update every conflicting row.
-
-A `WHERE` condition can restrict when the update should happen.
-
-For example, suppose a student is retaking an exam. We only want to replace the existing grade if the previous grade was a failure.
-
-```sql
-ON CONFLICT (student_id, course_id, exam_date)
-DO UPDATE
-SET grade_result = EXCLUDED.grade_result
-WHERE exams.grade_result IN ('p', 'troll');
-```
-
-Here, `exams.grade_result` refers to the existing stored grade.
-
-If the existing grade is not a failure, PostgreSQL does not update that row.
-
-This prevents an incoming retake record from unnecessarily overwriting a non-failing grade.
-
----
-
-## 3. Query 27: The Upsert Simulation
-
-**Challenge:** Simulate students retaking failed exams. Insert the new exam records, update existing records when a uniqueness conflict occurs, and return the resulting records.
-
-```sql
-INSERT INTO exams (
-    student_id,
-    course_id,
-    exam_date,
-    grade_result
+AVG(daily_top_grades) OVER (
+    ORDER BY exam_date
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
 )
-VALUES
-    (1, 3, '2004-05-26', 'ee'),
-    (1, 6, '2004-05-29', 'a'),
-    (1, 8, '2004-05-31', 'o+')
+```
 
-ON CONFLICT (student_id, course_id, exam_date)
+This calculates the average using the current row and the two preceding rows.
 
-DO UPDATE
-SET grade_result = EXCLUDED.grade_result
-WHERE exams.grade_result IN ('p', 'troll')
+**Important:** The meaning of those rows depends on the input data. If dates are missing, the preceding rows might not represent the preceding calendar days.
 
-RETURNING
-    student_id,
-    course_id,
+---
+
+## 3. Understanding Window Frames
+
+A window frame determines which rows are included in a window function's calculation for the current row.
+
+PostgreSQL supports two important frame types: `ROWS` and `RANGE`.
+
+### A. ROWS — Physical row-based framing
+
+```sql
+ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+```
+
+Includes:
+- The current row.
+- The immediately preceding row.
+- The second preceding row.
+
+That is exactly three rows, except at the beginning of the dataset, where fewer rows are available.
+
+**Example:**
+
+| Date | Value | Rows included | Moving average |
+|---|---:|---|---:|
+| Oct 1 | 5 | 5 | 5.00 |
+| Oct 2 | 8 | 5, 8 | 6.50 |
+| Oct 3 | 3 | 5, 8, 3 | 5.33 |
+| Oct 4 | 7 | 8, 3, 7 | 6.00 |
+
+Notice that the first two rows have partial windows because there are not yet three preceding/current rows available.
+
+### B. RANGE — Value-based framing
+
+`RANGE` defines a frame based on the values in the window's `ORDER BY` expression rather than a fixed number of physical rows.
+
+For example, with a timestamp ordering:
+
+```sql
+ORDER BY exam_date::timestamp
+RANGE BETWEEN INTERVAL '2 days' PRECEDING AND CURRENT ROW
+```
+
+This includes rows whose ordering values fall within the preceding two-day interval, including the current date.
+
+Unlike `ROWS`, the number of included rows can vary.
+
+**Key distinction:**
+
+| Feature | ROWS | RANGE |
+|---|---|---|
+| Based on | Physical rows | Ordering values |
+| Fixed number of rows | Yes, when enough rows exist | No |
+| Missing dates | Does not automatically account for them | Date interval still applies |
+| Typical use | Last N observations | Last N units of time/value |
+
+For a calendar-day moving average, a continuous calendar table combined with `ROWS` is often a straightforward and predictable approach.
+
+---
+
+## 4. Why Missing Dates Matter
+
+Consider the following daily data:
+
+| Date | Daily top grades |
+|---|---:|
+| Oct 1 | 5 |
+| Oct 2 | 8 |
+| Oct 7 | 3 |
+| Oct 8 | 7 |
+
+If we directly apply:
+
+```sql
+ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+```
+
+the window for October 7 includes October 1, October 2 and October 7.
+
+That is a three-row window, but it is not a three-calendar-day window.
+
+If the requirement is a rolling average across consecutive calendar days, we need to generate missing dates and assign zero to dates without qualifying grades.
+
+### Generating a continuous calendar
+
+PostgreSQL provides `generate_series()` for generating a sequence of dates.
+
+```sql
+SELECT generate_series(
+    DATE '2026-10-01',
+    DATE '2026-10-07',
+    INTERVAL '1 day'
+)::date AS exam_date;
+```
+
+This generates every calendar date from October 1 through October 7, including dates with no exam records.
+
+We can then `LEFT JOIN` the daily aggregates and use `COALESCE()` to replace missing counts with zero.
+
+---
+
+## 5. Complete Implementation — Query 25
+
+**Challenge:** Calculate a 3-day rolling average of total `o` and `o++` grades awarded across the school.
+
+```sql
+WITH date_bounds AS (
+    -- Find the first and last dates in the exam period
+    SELECT
+        MIN(exam_date) AS start_date,
+        MAX(exam_date) AS end_date
+    FROM exams
+),
+
+calendar AS (
+    -- Generate every calendar date in the exam period
+    SELECT
+        generate_series(
+            start_date,
+            end_date,
+            INTERVAL '1 day'
+        )::date AS exam_date
+    FROM date_bounds
+    WHERE start_date IS NOT NULL
+),
+
+daily_top_grades AS (
+    -- Aggregate qualifying grades for each date
+    SELECT
+        exam_date,
+        COUNT(*) FILTER (
+            WHERE grade_result IN ('o++', 'o')
+        ) AS daily_count
+    FROM exams
+    GROUP BY exam_date
+),
+
+complete_daily_metrics AS (
+    -- Preserve dates with no qualifying grades
+    SELECT
+        c.exam_date,
+        COALESCE(d.daily_count, 0) AS daily_count
+    FROM calendar c
+    LEFT JOIN daily_top_grades d
+        ON c.exam_date = d.exam_date
+)
+
+-- Calculate the rolling average over three consecutive calendar dates
+SELECT
     exam_date,
-    grade_result;
+    daily_count,
+    ROUND(
+        AVG(daily_count) OVER (
+            ORDER BY exam_date
+            ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+        ),
+        2
+    ) AS rolling_3day_avg
+FROM complete_daily_metrics
+ORDER BY exam_date;
 ```
 
-### Query Breakdown
+### How the query works
 
-**Step 1: Attempt the insertion**
+1. **`date_bounds`:** Finds the earliest and latest exam dates.
+2. **`calendar`:** Generates every calendar date within that range.
+3. **`daily_top_grades`:** Counts only `o++` and `o` grades per date.
+4. **`complete_daily_metrics`:** Uses `LEFT JOIN` to preserve dates without qualifying grades. `COALESCE()` converts missing counts to zero.
+5. **Final SELECT:** Calculates the rolling average over the current date and the two preceding calendar dates.
 
-```sql
-INSERT INTO exams (...)
-VALUES (...), (...), (...);
-```
+### Important boundary behaviour
 
-PostgreSQL attempts to insert all three proposed records.
+For the first date, the moving average uses one available day.
 
-**Step 2: Identify uniqueness conflicts**
+For the second date, it uses two available days.
 
-```sql
-ON CONFLICT (student_id, course_id, exam_date)
-```
+From the third date onwards, it uses three consecutive calendar days.
 
-PostgreSQL checks whether an existing record has the same combination of these three columns.
-
-**Step 3: Update the existing record**
-
-```sql
-DO UPDATE
-SET grade_result = EXCLUDED.grade_result
-```
-
-If a conflict occurs, the existing record's grade is replaced with the incoming grade.
-
-**Step 4: Protect non-failing grades**
-
-```sql
-WHERE exams.grade_result IN ('p', 'troll')
-```
-
-The update happens only if the existing grade is `p` or `troll`.
-
-**Step 5: Return the affected records**
-
-```sql
-RETURNING
-    student_id,
-    course_id,
-    exam_date,
-    grade_result;
-```
-
-The query returns successfully inserted or updated records.
-
-Note: The sample values are illustrative. Whether each row is inserted or updated depends on the existing data and the unique constraint.
+This is standard partial-window behaviour. If a report should display results only when a complete three-day window exists, filter out the first two dates using an outer query and `ROW_NUMBER()`.
 
 ---
 
-## 4. Important PostgreSQL Behaviours
+## 6. Understanding the Output
 
-### A. Atomicity and Concurrency
+Suppose the daily counts are:
 
-An `INSERT ... ON CONFLICT DO UPDATE` statement provides an atomic insert-or-update outcome.
+| Date | Daily count |
+|---|---:|
+| Oct 1 | 5 |
+| Oct 2 | 8 |
+| Oct 3 | 3 |
+| Oct 4 | 7 |
+| Oct 5 | 4 |
 
-This means PostgreSQL handles the conflict as part of the same database statement rather than requiring the application to perform a separate existence check followed by an update.
+The rolling average is:
 
-It is particularly useful when multiple transactions attempt to insert the same unique key concurrently.
+| Date | Calculation | Rolling average |
+|---|---|---:|
+| Oct 1 | 5 / 1 | 5.00 |
+| Oct 2 | (5 + 8) / 2 | 6.50 |
+| Oct 3 | (5 + 8 + 3) / 3 | 5.33 |
+| Oct 4 | (8 + 3 + 7) / 3 | 6.00 |
+| Oct 5 | (3 + 7 + 4) / 3 | 4.67 |
 
-### B. Idempotency
-
-An operation is idempotent when repeating it produces the same intended final state as executing it once.
-
-Upserts can help build idempotent data-ingestion workflows.
-
-For example, processing the same incoming record repeatedly can leave the stored grade unchanged after the first successful update.
-
-However, an upsert is not automatically idempotent in every situation. Triggers, timestamps, counters, or other update-side effects can change the outcome of repeated executions.
-
-### C. Batch Upserts
-
-PostgreSQL allows multiple rows to be inserted or upserted in one statement.
-
-This reduces the number of database round-trips when processing batches.
-
-One important restriction: a single `INSERT ... ON CONFLICT DO UPDATE` statement cannot affect the same existing row more than once. If the input batch contains duplicate values for the conflict key, PostgreSQL can raise a cardinality violation.
-
-Therefore, deduplicate incoming records when necessary.
-
-### D. `RETURNING` Is Not a Separate `SELECT`
-
-`RETURNING` retrieves the resulting values directly from the data-modification statement.
-
-It works with:
-
-- `INSERT`
-- `UPDATE`
-- `DELETE`
-- `MERGE` (supported in PostgreSQL 15 and later)
+Each new row moves the window forward by one calendar day.
 
 ---
 
-## 5. Production Applications
+## 7. Important PostgreSQL Concepts to Remember
 
-Upserts are useful in several real-world scenarios:
+### `AVG()` as a window function
 
-1. **Data ingestion:** Reprocessing incoming records without repeatedly failing on duplicate keys.
-2. **Webhook handling:** Processing repeated webhook events while maintaining the intended database state.
-3. **Backend APIs:** Creating a record if it does not exist, or updating it if it already exists.
-4. **Synchronization:** Keeping local database records aligned with incoming data from external systems.
-5. **Batch processing:** Inserting or updating multiple records in a single database operation.
+```sql
+AVG(column_name) OVER (
+    ORDER BY date_column
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+)
+```
+
+Unlike a regular aggregate, a window aggregate does not collapse the input rows into one output row per group.
+
+### `COALESCE()`
+
+```sql
+COALESCE(daily_count, 0)
+```
+
+Returns zero when the joined value is `NULL`.
+
+This is important when missing dates should contribute zero to the rolling average.
+
+### `generate_series()`
+
+```sql
+generate_series(start_date, end_date, INTERVAL '1 day')
+```
+
+Generates a continuous sequence of dates or timestamps.
+
+Useful for:
+- Time-series analysis.
+- Filling gaps in reporting.
+- Daily, weekly or monthly calendars.
+
+### Explicit window frames
+
+Always understand the frame being used.
+
+```sql
+ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+```
+
+means three rows when three are available.
+
+It does not inherently mean three calendar days.
 
 ---
 
-## 6. Key Takeaways
+## 8. Practical Takeaways
 
-| Concept | Purpose |
-|---|---|
-| `INSERT` | Adds new records |
-| `ON CONFLICT` | Defines what happens when a uniqueness conflict occurs |
-| `DO NOTHING` | Skips the conflicting insertion |
-| `DO UPDATE` | Updates the existing record |
-| `EXCLUDED` | References the incoming proposed row |
-| `WHERE` | Restricts when a conflicting row is updated |
-| `RETURNING` | Returns rows affected by the operation |
+1. Aggregate raw records to the required time grain before calculating a moving average.
+2. Use `ROWS` when the requirement is based on a fixed number of observations.
+3. Use `RANGE` when the requirement is based on a range of ordering values.
+4. Missing dates matter: generate a continuous calendar if the requirement is based on consecutive calendar days.
+5. Use `LEFT JOIN` and `COALESCE()` to preserve dates with zero qualifying records.
+6. Moving averages at the beginning of a dataset may use partial windows unless explicitly excluded.
+7. Use an explicit window frame instead of relying on PostgreSQL's default frame.
 
-**Remember:**
-
-- An upsert is an `INSERT` with conflict-handling logic.
-- `ON CONFLICT` requires a suitable unique constraint or index.
-- `EXCLUDED` refers to the incoming row, not the existing stored row.
-- `DO UPDATE ... WHERE` allows conditional updates.
-- `RETURNING` retrieves affected rows without a separate `SELECT`.
-- Upserts help with atomicity and idempotent workflows, but do not automatically guarantee that every application-level operation is idempotent.
+**Core idea:** A moving average is only as meaningful as the window it represents. Always distinguish between the last three rows and the last three calendar days.
