@@ -513,7 +513,6 @@ ORDER BY full_name ASC;
 -- Expert Level (Production Data Engineering & Anomaly Detection)
 -- =============================================================================
 
--- Expert Level (Production Data Engineering & Anomaly Detection)**
 
 
 -- 21. Multi-Dimensional Rollups: Use GROUP BY ROLLUP to generate a hierarchical report 
