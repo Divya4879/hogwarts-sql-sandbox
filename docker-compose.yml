@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  postgres-sandbox:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: wizard
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: hogwarts
+    ports:
+      - "5432:5432"
+    volumes:
+      # Automatically runs your schema and seed on startup from init/
+      - ./init:/docker-entrypoint-initdb.d
+    restart: unless-stopped
