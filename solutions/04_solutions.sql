@@ -1520,14 +1520,14 @@ ORDER BY top_grade_percentage DESC, c.professor_name;
 -- QUESTION 27: The Upsert Simulation: Write an INSERT ... ON CONFLICT statement simulating a student retaking a failed exam.
 -- Update the grade to the new score, and use the RETURNING clause to output the changes.
 
-INSERT INTO exams (student_id, course_id, exam_date, grade_result) VALUES
-    (1, 3, '2004-05-26', 'ee'),    -- Potions
-    (1, 6, '2004-05-29', 'a'),     -- History of Magic
-    (1, 8, '2004-05-31', 'o+')     -- Care of Magical Creatures
+INSERT INTO exams (student_id, course_id, exam_date, grade_result)
+VALUES
+    (1, 6, '2004-05-29', 'o')
 
 ON CONFLICT (student_id, course_id, exam_date)
 
-DO UPDATE SET grade_result = EXCLUDED.grade_result
+DO UPDATE
+SET grade_result = EXCLUDED.grade_result
 
 RETURNING student_id, course_id, exam_date, grade_result;
 
@@ -1658,6 +1658,41 @@ BEGIN;
 
 EXPLAIN ANALYZE
 
+SELECT
+    s.first_name || ' ' || s.last_name AS student_name,
+    ROUND((
+        SELECT AVG(
+            CASE
+                WHEN e.grade_result = 'o++' THEN 6.0
+                WHEN e.grade_result = 'o+' THEN 5.0
+                WHEN e.grade_result = 'o' THEN 4.0
+                WHEN e.grade_result = 'ee' THEN 3.0
+                WHEN e.grade_result = 'a' THEN 2.0
+                WHEN e.grade_result = 'p' THEN 1.0
+                ELSE 0.0
+            END
+        )
+        FROM exams e
+        WHERE e.student_id = s.student_id
+    ), 2) AS avg_gpa
+FROM students s
+WHERE EXISTS (
+    SELECT 1
+    FROM exams e
+    WHERE e.student_id = s.student_id
+)
+ORDER BY avg_gpa DESC;
+
+ROLLBACK;
+
+
+--
+
+
+BEGIN;
+
+EXPLAIN ANALYZE
+
 WITH tmp_table AS (
     SELECT
         students.student_id,
@@ -1684,40 +1719,6 @@ SELECT
     student_name,
     ROUND(marks / courses, 2) AS avg_gpa
 FROM tmp_table
-ORDER BY avg_gpa DESC;
-
-ROLLBACK;
-
-
----
-
-BEGIN;
-
-EXPLAIN ANALYZE
-
-SELECT
-    s.first_name || ' ' || s.last_name AS student_name,
-    ROUND((
-        SELECT AVG(
-            CASE
-                WHEN e.grade_result = 'o++' THEN 6.0
-                WHEN e.grade_result = 'o+' THEN 5.0
-                WHEN e.grade_result = 'o' THEN 4.0
-                WHEN e.grade_result = 'ee' THEN 3.0
-                WHEN e.grade_result = 'a' THEN 2.0
-                WHEN e.grade_result = 'p' THEN 1.0
-                ELSE 0.0
-            END
-        )
-        FROM exams e
-        WHERE e.student_id = s.student_id
-    ), 2) AS avg_gpa
-FROM students s
-WHERE EXISTS (
-    SELECT 1
-    FROM exams e
-    WHERE e.student_id = s.student_id
-)
 ORDER BY avg_gpa DESC;
 
 ROLLBACK;
