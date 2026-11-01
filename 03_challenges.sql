@@ -85,3 +85,26 @@
 
 -- 25. Moving Averages: Calculate a 3-day rolling average of total 'o' and 'o++' grades awarded 
 -- across the school to spot grading trends.
+
+
+
+-- =============================================================================
+-- PostgreSQL Mastery (Architecture & Performance)
+-- =============================================================================
+
+
+
+-- 26. Data Integrity Audit: Write a query to flag "suspicious" grading patterns,
+-- such as a professor awarding more than 50% 'o++' or 'o' grades across all their exams.
+
+-- 27. The Upsert Simulation: Write an INSERT ... ON CONFLICT statement simulating a student retaking a failed exam.
+-- Update the grade to the new score, and use the RETURNING clause to output the changes.
+
+-- 28. Recursive CTEs: Use a recursive query to generate a sequence of escalating "academic probation" warning levels for students 
+-- who accumulate consecutive 'p' or 'troll' grades.
+
+-- 29. Telemetry & Observability View: Design a materialized view that aggregates daily exam volume and failure rates,
+-- structuring the output exactly as it would need to be formatted for scraping by an observability tool or metrics dashboard.
+
+-- 30. Query Optimization (EXPLAIN ANALYZE): Write a deliberately inefficient query utilizing a correlated subquery 
+-- to find top students. Then, write the optimized JOIN equivalent and document the EXPLAIN ANALYZE cost difference in the comments.

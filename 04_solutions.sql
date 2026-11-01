@@ -632,3 +632,234 @@ SELECT
     ) AS rolling_3day_avg
 FROM daily_top_grades
 ORDER BY exam_date ASC;
+
+
+
+-- =============================================================================
+-- PostgreSQL Mastery (Architecture & Performance)
+-- =============================================================================
+
+
+
+-- 26. Data Integrity Audit: Write a query to flag "suspicious" grading patterns,
+-- such as a professor awarding more than 50% 'o++' or 'o' grades across all their exams.
+
+WITH tmp_table AS(
+    SELECT
+        course_name,
+        professor_name,
+        SUM(
+            CASE WHEN grade_result = 'o++' THEN 1.00 ELSE 0.00 END
+        ) AS cnt_6,
+        SUM(
+            CASE WHEN grade_result = 'o+' THEN 1.00 ELSE 0.00 END
+        ) AS cnt_5,
+        SUM(
+            CASE WHEN grade_result = 'o' THEN 1.00 ELSE 0.00 END
+        ) AS cnt_4,
+        SUM(
+            CASE WHEN grade_result = 'ee' THEN 1.00 ELSE 0.00 END
+        ) AS cnt_3,
+        SUM(
+            CASE WHEN grade_result = 'a' THEN 1.00 ELSE 0.00 END
+        ) AS cnt_2,
+        SUM(
+            CASE WHEN grade_result = 'p' THEN 1.00 ELSE 0.00 END
+        ) AS cnt_1,
+        SUM(
+            CASE WHEN grade_result = 'troll' THEN 1 ELSE 0 END
+        ) AS cnt_0,
+        COUNT(exam_id) AS total
+    FROM courses
+    JOIN exams
+    ON courses.course_id = exams.course_id
+    GROUP BY professor_name, course_name
+),
+
+tmp_ratios AS(
+    SELECT
+        course_name,
+        professor_name,
+        ROUND(cnt_6/total, 2) * 100 AS "grade_o++",
+        ROUND(cnt_5/total, 2) * 100 AS "grade_o+",
+        ROUND(cnt_4/total, 2) * 100 AS "grade_o",
+        ROUND(cnt_3/total, 2) * 100 AS "grade_ee",
+        ROUND(cnt_2/total, 2) * 100 AS "grade_a",
+        ROUND(cnt_1/total, 2) * 100 AS "grade_p",
+        ROUND(cnt_0/total, 2) * 100 AS "grade_troll"
+    FROM tmp_table
+)
+
+SELECT
+    professor_name,
+    course_name,
+    "grade_o++",
+    "grade_o+",
+    "grade_o",
+    "grade_ee",
+    "grade_a",
+    "grade_p",
+    "grade_troll"
+FROM tmp_ratios
+WHERE "grade_o++" >= 50 OR "grade_o+" >= 50 OR "grade_o" >= 50 OR "grade_ee" >= 50 OR "grade_a" >= 50 OR "grade_p" >= 50 OR "grade_troll" >= 50 ;
+
+-- 27. The Upsert Simulation: Write an INSERT ... ON CONFLICT statement simulating a student retaking a failed exam.
+-- Update the grade to the new score, and use the RETURNING clause to output the changes.
+
+INSERT INTO exams (student_id, course_id, exam_date, grade_result) VALUES
+    (1, 3, '2004-05-26', 'ee'),    -- Potions 
+    (1, 6, '2004-05-29', 'a'),     -- History of Magic
+    (1, 8, '2004-05-31', 'o+')     -- Care of Magical Creatures
+
+ON CONFLICT (student_id, course_id, exam_date)
+
+DO UPDATE SET grade_result = EXCLUDED.grade_result
+
+RETURNING student_id, course_id, exam_date, grade_result;
+
+-- 28. Recursive CTEs: Use a recursive query to generate a sequence of escalating "academic probation" warning levels for students 
+-- who accumulate consecutive 'p' or 'troll' grades.
+
+WITH RECURSIVE numbered_exams AS (
+    -- Step 1: Assign a chronological row number to every exam taken by each student
+    SELECT
+        students.student_id,
+        first_name || ' ' || last_name AS student_name,
+        exam_date,
+        grade_result,
+        ROW_NUMBER() OVER (PARTITION BY students.student_id ORDER BY exam_date ASC) AS rn
+    FROM students
+    JOIN exams ON students.student_id = exams.student_id
+),
+
+recursive_probation AS (
+    -- Step 2: Anchor Member - Evaluate the student's very first exam (rn = 1)
+    SELECT
+        student_id,
+        student_name,
+        exam_date,
+        grade_result,
+        rn,
+        CASE WHEN grade_result IN ('p', 'troll') THEN 1 ELSE 0 END AS warning_level
+    FROM numbered_exams
+    WHERE rn = 1
+    
+    UNION ALL
+    
+    -- Step 3: Recursive Member - Step forward one exam at a time (rn + 1)
+    SELECT
+        e.student_id,
+        e.student_name,
+        e.exam_date,
+        e.grade_result,
+        e.rn,
+        -- Escalate warning level if they failed, or reset if they passed a class
+        CASE 
+            WHEN e.grade_result IN ('p', 'troll') THEN rp.warning_level + 1 
+            ELSE 0 
+        END AS warning_level
+    FROM numbered_exams e
+    JOIN recursive_probation rp 
+      ON e.student_id = rp.student_id 
+     AND e.rn = rp.rn + 1
+)
+
+SELECT 
+    student_name,
+    exam_date,
+    grade_result,
+    warning_level
+FROM recursive_probation
+WHERE warning_level > 0  -- Filters to show students currently escalating in warning levels
+ORDER BY student_name, exam_date;
+
+
+-- 29. Telemetry & Observability View: Design a materialized view that aggregates daily exam volume and failure rates,
+-- structuring the output exactly as it would need to be formatted for scraping by an observability tool or metrics dashboard.
+
+WITH tmp_data AS(
+    SELECT
+        exam_date,
+        SUM(CASE WHEN grade_result = 'troll' THEN 1.00 ELSE 0.00 END) AS fails,
+        COUNT(exam_id) AS total_exams_held
+    FROM exams
+    GROUP BY exam_date
+)
+
+SELECT
+    exam_date,
+    ROUND((fails/total_exams_held * 100), 2) AS failure_rate,
+    total_exams_held
+FROM tmp_data
+ORDER BY exam_date;
+
+-- 30. Query Optimization (EXPLAIN ANALYZE): Write a deliberately inefficient query utilizing a correlated subquery 
+-- to find top students. Then, write the optimized JOIN equivalent and document the EXPLAIN ANALYZE cost difference in the comments.
+
+BEGIN;
+
+EXPLAIN ANALYZE
+
+WITH tmp_table AS(
+    SELECT
+        students.student_id,
+        first_name || ' ' || last_name AS student_name,
+        SUM(
+            CASE
+                WHEN grade_result = 'o++' THEN 6.0
+                WHEN grade_result = 'o+'  THEN 5.0
+                WHEN grade_result = 'o'   THEN 4.0
+                WHEN grade_result = 'ee'  THEN 3.0
+                WHEN grade_result = 'a'   THEN 2.0
+                WHEN grade_result = 'p'   THEN 1.0
+                ELSE 0.0
+            END
+        ) AS marks,
+        COUNT(course_id) AS courses
+    FROM students
+    JOIN exams
+    ON students.student_id = exams.student_id
+    GROUP BY students.student_id, student_name
+)
+
+SELECT
+    student_name,
+    ROUND(marks/courses, 2) AS avg_gpa
+FROM tmp_table
+ORDER BY avg_gpa DESC;
+
+ROLLBACK;
+
+---
+
+BEGIN;
+
+EXPLAIN ANALYZE
+
+SELECT
+    student_name,
+    ROUND(marks / courses, 2) AS avg_gpa
+FROM (
+    SELECT
+        students.student_id,
+        first_name || ' ' || last_name AS student_name,
+        SUM(
+            CASE
+                WHEN grade_result = 'o++' THEN 6.0
+                WHEN grade_result = 'o+'  THEN 5.0
+                WHEN grade_result = 'o'   THEN 4.0
+                WHEN grade_result = 'ee'  THEN 3.0
+                WHEN grade_result = 'a'   THEN 2.0
+                WHEN grade_result = 'p'   THEN 1.0
+                ELSE 0.0
+            END
+        ) AS marks,
+        COUNT(course_id) AS courses
+    FROM students
+    JOIN exams
+    ON students.student_id = exams.student_id
+    GROUP BY students.student_id, first_name, last_name
+) AS tmp_table
+ORDER BY avg_gpa DESC;
+
+ROLLBACK;
