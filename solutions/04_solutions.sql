@@ -151,26 +151,24 @@ ORDER BY students DESC
 LIMIT 1;
 
 
--- 11. Calculate the overall percentage of 'troll' grades given out across the entire school.
+-- QUESTION 11: Calculate the overall percentage of 'troll' grades
+-- given out across the entire school.
 
 SELECT
-    house_name,
+    COUNT(*) FILTER (
+        WHERE grade_result = 'troll'
+    ) AS total_troll_grades,
 
-    -- In PostgreSQL, dividing one integer by another (e.g., trolls / total) 
-    -- strictly returns an integer. If the numerator is smaller than the denominator 
-    -- (like 2 trolls out of 35 exams), Postgres truncates the remainder and returns 0.
-    -- 
-    -- Fix: Cast at least one operand to DECIMAL or NUMERIC (e.g., trolls::DECIMAL / total) 
-    -- to force floating-point division and calculate accurate percentages.
+    COUNT(*) AS total_exams,
 
-    ROUND(SUM(CASE WHEN grade_result = 'troll' THEN 1 ELSE 0 END)::DECIMAL/COUNT(exam_id) * 100, 2) AS trolls_ratio
-    
-FROM exams
-JOIN students
-ON exams.student_id = students.student_id
-JOIN houses
-ON students.house_id = houses.house_id
-GROUP BY house_name;
+    ROUND(
+        100.0 * COUNT(*) FILTER (
+            WHERE grade_result = 'troll'
+        ) / NULLIF(COUNT(*), 0),
+        2
+    ) AS troll_percentage
+
+FROM exams;
 
 
 -- 12. Find the student(s) who received the highest number of 'ee' grades.
@@ -543,60 +541,82 @@ FROM student_courses
 -- Use the native array containment operator (@>) with the ARRAY constructor
 WHERE enrolled_courses @> ARRAY['Potions', 'Defense Against the Dark Arts'];
 
--- 24. Gap Analysis (generate_series): Use generate_series() to create a complete calendar of the exam period, 
--- then LEFT JOIN the exams table to find exactly which dates had zero exams scheduled.
 
-WITH tmp_table AS(
+-- QUESTION 24: Use generate_series() to create a complete calendar
+-- of the exam period and find dates with zero exams scheduled.
+
+WITH date_range AS (
     SELECT
-        MIN(exam_date) AS min_date,
-        MAX(exam_date) AS max_date
+        MIN(exam_date)::date AS min_date,
+        MAX(exam_date)::date AS max_date
     FROM exams
 ),
 
-all_dates AS(
+calendar AS (
     SELECT
-        generate_series(min_date::date, max_date::date, '1 day'::interval)::date AS exam_date
-    FROM tmp_table
+        generate_series(
+            min_date,
+            max_date,
+            INTERVAL '1 day'
+        )::date AS exam_date
+    FROM date_range
 )
 
 SELECT
-    all_dates.exam_date,
-    COUNT(exam_id) AS exams
-FROM all_dates
+    calendar.exam_date
+
+FROM calendar
+
 LEFT JOIN exams
-ON all_dates.exam_date = exams.exam_date
-GROUP BY all_dates.exam_date
-ORDER BY all_dates.exam_date;
+    ON calendar.exam_date = exams.exam_date
 
--- Q25. Calculate the 3-day rolling average of total 'o' and 'o++'
--- grades awarded day-by-day throughout the exam period.
+GROUP BY calendar.exam_date
 
-WITH calendar AS (
+HAVING COUNT(exams.exam_id) = 0
+
+ORDER BY calendar.exam_date;
+
+-- QUESTION 25: Calculate a 3-day rolling average of total
+-- 'o' and 'o++' grades awarded across the school.
+
+WITH date_range AS (
+    SELECT
+        MIN(exam_date)::date AS min_date,
+        MAX(exam_date)::date AS max_date
+    FROM exams
+),
+
+calendar AS (
     SELECT
         generate_series(
-            (SELECT MIN(exam_date) FROM exams),
-            (SELECT MAX(exam_date) FROM exams),
+            min_date,
+            max_date,
             INTERVAL '1 day'
         )::date AS exam_date
+    FROM date_range
 ),
 
-daily_grades AS (
+daily_top_grades AS (
     SELECT
-        exam_date,
+        exam_date::date AS exam_date,
+
         COUNT(*) FILTER (
-            WHERE grade_result IN ('o', 'o++')
+            WHERE grade_result IN ('o++', 'o')
         ) AS daily_count
+
     FROM exams
-    GROUP BY exam_date
+    GROUP BY exam_date::date
 ),
 
-calendar_grades AS (
+complete_daily_data AS (
     SELECT
-        c.exam_date,
-        COALESCE(d.daily_count, 0) AS daily_count
-    FROM calendar c
-    LEFT JOIN daily_grades d
-        ON c.exam_date = d.exam_date
+        calendar.exam_date,
+        COALESCE(daily_top_grades.daily_count, 0) AS daily_count
+
+    FROM calendar
+
+    LEFT JOIN daily_top_grades
+        ON calendar.exam_date = daily_top_grades.exam_date
 )
 
 SELECT
@@ -609,9 +629,10 @@ SELECT
             ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
         ),
         2
-    ) AS three_day_rolling_average
+    ) AS rolling_3day_avg
 
-FROM calendar_grades
+FROM complete_daily_data
+
 ORDER BY exam_date;
 
 
