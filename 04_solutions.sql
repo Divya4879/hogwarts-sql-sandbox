@@ -506,3 +506,129 @@ ON a.student_id = exams.student_id
 GROUP BY a.student_id
 HAVING SUM(CASE WHEN grade_result IN('p', 'troll') THEN 1 ELSE 0 END) = 0
 ORDER BY full_name ASC;
+
+
+
+-- =============================================================================
+-- Expert Level (Production Data Engineering & Anomaly Detection)
+-- =============================================================================
+
+-- Expert Level (Production Data Engineering & Anomaly Detection)**
+
+
+-- 21. Multi-Dimensional Rollups: Use GROUP BY ROLLUP to generate a hierarchical report 
+-- showing total exams taken by house, by year, and the overall school total in a single query.
+
+SELECT
+    house_name AS "house",
+    hogwarts_year AS "Year",
+    COUNT(exam_id) AS exams_taken
+FROM houses
+JOIN students
+ON houses.house_id = students.house_id
+JOIN exams ON students.student_id = exams.student_id
+GROUP BY ROLLUP(house_name, hogwarts_year);
+
+-- 22. Anomaly Detection (Volatility): Calculate the standard deviation of numeric GPAs for each student 
+-- to identify who has the most inconsistent academic performance (e.g., scoring 'o++' in one class and 'troll' in another).
+
+WITH tmp_data AS(
+    SELECT
+        first_name || ' ' || last_name AS student_name,
+        students.student_id AS student_id,
+        exams.course_id AS course_id,
+        CASE
+            WHEN grade_result = 'o++' THEN 6.0
+            WHEN grade_result = 'o+'  THEN 5.0
+            WHEN grade_result = 'o'   THEN 4.0
+            WHEN grade_result = 'ee'  THEN 3.0
+            WHEN grade_result = 'a'   THEN 2.0
+            WHEN grade_result = 'p'   THEN 1.0
+            ELSE 0.0
+        END AS marks
+    FROM students
+    JOIN exams
+    ON exams.student_id = students.student_id
+)
+
+SELECT
+    student_id,
+    student_name,
+    ROUND(STDDEV(marks), 2) AS volatility_score
+FROM tmp_data
+GROUP BY student_id, student_name
+ORDER BY volatility_score DESC, student_name ASC;
+
+
+-- 23. Array Operations: Aggregate a student's enrolled courses into a PostgreSQL array 
+-- and use the array "contains" operator (@>) to find students who took both 'Potions' and 
+-- 'Defense Against the Dark Arts'.
+
+WITH student_courses AS (
+    SELECT
+        students.student_id,
+        first_name || ' ' || last_name AS student_name,
+        -- Use ARRAY_AGG() to build a native PostgreSQL text array
+        -- Explicitly cast the aggregated array to TEXT[]
+        ARRAY_AGG(course_name)::TEXT[] AS enrolled_courses
+    FROM students
+    JOIN exams ON students.student_id = exams.student_id
+    JOIN courses ON exams.course_id = courses.course_id
+    GROUP BY students.student_id, students.first_name, students.last_name
+)
+SELECT
+    student_name,
+    enrolled_courses
+FROM student_courses
+-- Use the native array containment operator (@>) with the ARRAY constructor
+WHERE enrolled_courses @> ARRAY['Potions', 'Defense Against the Dark Arts'];
+
+-- 24. Gap Analysis (generate_series): Use generate_series() to create a complete calendar of the exam period, 
+-- then LEFT JOIN the exams table to find exactly which dates had zero exams scheduled.
+
+WITH tmp_table AS(
+    SELECT
+        MIN(exam_date) AS min_date,
+        MAX(exam_date) AS max_date
+    FROM exams
+),
+
+all_dates AS(
+    SELECT
+        generate_series(min_date::date, max_date::date, '1 day'::interval)::date AS exam_date
+    FROM tmp_table
+)
+
+SELECT
+    all_dates.exam_date,
+    COUNT(exam_id) AS exams
+FROM all_dates
+LEFT JOIN exams
+ON all_dates.exam_date = exams.exam_date
+GROUP BY all_dates.exam_date
+ORDER BY all_dates.exam_date;
+
+
+-- 25. Moving Averages: Calculate a 3-day rolling average of total 'o' and 'o++' grades awarded 
+-- across the school to spot grading trends.
+
+WITH daily_top_grades AS (
+    SELECT
+        exam_date,
+        SUM(CASE WHEN grade_result IN ('o++', 'o') THEN 1 ELSE 0 END) AS daily_count
+    FROM exams
+    GROUP BY exam_date
+)
+
+SELECT
+    exam_date,
+    daily_count,
+    ROUND(
+        AVG(daily_count) OVER (
+            ORDER BY exam_date ASC
+            ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+        ), 
+        2
+    ) AS rolling_3day_avg
+FROM daily_top_grades
+ORDER BY exam_date ASC;

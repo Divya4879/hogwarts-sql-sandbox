@@ -63,3 +63,25 @@
 
 -- 20. The Flawless Record: Identify students who passed every single exam they took 
 -- without a single 'p' or 'troll', using a HAVING clause with conditional aggregation.
+
+
+-- =============================================================================
+-- Expert Level (Production Data Engineering & Anomaly Detection)
+-- =============================================================================
+
+
+-- 21. Multi-Dimensional Rollups: Use GROUP BY ROLLUP to generate a hierarchical report 
+-- showing total exams taken by house, by year, and the overall school total in a single query.
+
+-- 22. Anomaly Detection (Volatility): Calculate the standard deviation of numeric GPAs for each student 
+-- to identify who has the most inconsistent academic performance (e.g., scoring 'o++' in one class and 'troll' in another).
+
+-- 23. Array Operations: Aggregate a student's enrolled courses into a PostgreSQL array 
+-- and use the array "contains" operator (@>) to find students who took both 'Potions' and 
+-- 'Defense Against the Dark Arts'.
+
+-- 24. Gap Analysis (generate_series): Use generate_series() to create a complete calendar of the exam period, 
+-- then LEFT JOIN the exams table to find exactly which dates had zero exams scheduled.
+
+-- 25. Moving Averages: Calculate a 3-day rolling average of total 'o' and 'o++' grades awarded 
+-- across the school to spot grading trends.
